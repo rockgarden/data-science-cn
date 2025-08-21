@@ -56,6 +56,23 @@
 
     *(你可以添加更多检查，例如 `path` 是否非空等，根据数据模型定义)*
 
+* **示例：检查 `app_id` 字段是否都存在于 `sys_app` 表中，即外键定义。**
+
+    ```sql
+    -- 计算 app_id 字段符合外键约束的比率
+    SELECT 
+        COUNT(CASE WHEN sa.app_id IS NOT NULL THEN 1 END) AS A, -- app_id 存在于 sys_app 表中的记录数
+        COUNT(*) AS B, -- sys_api 表中的总记录数
+        ROUND(
+            COUNT(CASE WHEN sa.app_id IS NOT NULL THEN 1 END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS data_model_ratio -- 数据模型比率
+    FROM sys_api sa
+    LEFT JOIN sys_app app ON sa.app_id = app.id -- 假设 sys_app 的主键是 id
+    WHERE sa.is_delete = b'0'; -- 仅评估未删除的数据
+    ```
+
 #### **0103 - 元数据 (Metadata)**
 
 * **示例：检查 `encrypt` 字段是否只包含 `0` 或 `1`（符合 `bit(1)` 的元数据定义）。**
@@ -78,6 +95,23 @@
     ```
 
     *(可以为其他有严格值域定义的字段添加类似检查)*
+
+* **示例：检查 `version` 字段是否符合 `vX.Y.Z` 的版本号格式。**
+
+    ```sql
+    -- 计算 version 字段符合元数据定义（版本号格式）的比率
+    -- 使用正则表达式匹配 v1.0.0 这类格式
+    SELECT 
+        COUNT(CASE WHEN version REGEXP '^v[0-9]+\\.[0-9]+\\.[0-9]+$' THEN 1 END) AS A, -- 符合版本号格式的记录数
+        COUNT(*) AS B, -- 总记录数
+        ROUND(
+            COUNT(CASE WHEN version REGEXP '^v[0-9]+\\.[0-9]+\\.[0-9]+$' THEN 1 END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS metadata_ratio -- 元数据比率
+    FROM sys_api 
+    WHERE is_delete = b'0' AND version IS NOT NULL; -- 仅评估未删除且version不为空的数据
+    ```
 
 #### **0104 - 业务规则 (Business Rule)**
 
@@ -102,6 +136,30 @@
 
     *(需要根据实际的业务规则调整条件)*
 
+* **示例：检查当 `register_type` 为 '网关自动注册' 时，`create_by` 字段是否为 'gateway'。**
+
+    ```sql
+    -- 计算符合业务规则（网关注册的创建者应为gateway）的比率
+    SELECT 
+        COUNT(CASE 
+            WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
+            WHEN register_type != '网关自动注册' THEN 1 -- 其他情况也视为符合规则
+            ELSE 0 
+        END) AS A, -- 符合业务规则的记录数
+        COUNT(*) AS B, -- 总记录数
+        ROUND(
+            COUNT(CASE 
+                WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
+                WHEN register_type != '网关自动注册' THEN 1 
+                ELSE 0 
+            END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS business_rule_ratio -- 业务规则比率
+    FROM sys_api 
+    WHERE is_delete = b'0'; -- 仅评估未删除的数据
+    ```
+
 #### **0105 - 权威参考数据 (Authoritative Reference Data)**
 
 * **示例：检查 `response_data_type` 是否在预定义列表中。**
@@ -124,6 +182,23 @@
     ```
 
     *(需要根据实际的参考数据列表调整 `IN (...)`)*
+
+* **目标：检查 `openapi_type` 字段是否为空或在预定义的权威列表中。**
+
+    ```sql
+    -- 计算 openapi_type 字段引用权威参考数据的比率
+    -- 假设权威列表为：'OpenAPI 3.0', 'Swagger 2.0', 'RAML'
+    SELECT 
+        COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) AS A,
+        COUNT(*) AS B,
+        ROUND(
+            COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS reference_data_ratio
+    FROM sys_api 
+    WHERE is_delete = b'0';
+    ```
 
 #### **0106 - 安全规范 (Security Specification)**
 
@@ -158,7 +233,22 @@
 
     ```
 
----
+* **示例：检查 `api_secret` 字段是否经过加密（例如，长度大于16位且为随机字符串，或通过加密函数处理,SQL中的简单推断）。**
+
+    ```sql
+    -- **警告**：这是一个非常简化的示例，仅检查长度。
+    -- 真实场景中，明文密码/密钥是严重安全问题，应通过应用日志或安全扫描工具检查。
+    SELECT 
+        COUNT(CASE WHEN LENGTH(api_secret) > 32 THEN 1 END) AS A, -- 假设长字符串更可能是密文
+        COUNT(*) AS B,
+        ROUND(
+            COUNT(CASE WHEN LENGTH(api_secret) > 32 THEN 1 END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS security_spec_ratio
+    FROM sys_api 
+    WHERE is_delete = b'0' AND api_secret IS NOT NULL;
+    ```
 
 ### **2. 完整性 (Completeness)**
 
@@ -203,8 +293,6 @@
     WHERE is_delete = b'0' AND enabled = b'1';
 
     ```
-
----
 
 ### **3. 准确性 (Accuracy)**
 
@@ -332,13 +420,11 @@
 
     ```
 
----
-
 ### **4. 一致性 (Consistency)**
 
 #### **0401 - 相同数据一致性 (Same Data Consistency)**
 
-* **示例：检查 `sys_api` 中的 `app_id` 是否在 `sys_app` (假设有此表) 中存在。**
+* **示例：检查 `sys_api` 中的 `app_id` 是否在 `sys_app` 中存在。**
 
     ```sql
     -- 0401 - 相同数据一致性 - 检查 app_id 是否在 sys_app 中存在
@@ -359,6 +445,44 @@
 
     ```
 
+    ```sql
+    -- ============================================================================
+    -- 计算 sys_api 表中 app_id 字段与 sys_app 表中 id 字段的主外键关联校验通过率
+    -- ============================================================================
+
+    SELECT 
+    -- sys_api 表中 app_id 非空的总记录数
+    COUNT(*) AS total_api_records,
+    
+    -- 在 sys_app 表中能找到对应 id 的 app_id 记录数（有效引用数）
+    COUNT(sa.id) AS valid_referenced_app_records,
+    
+    -- 计算主外键关联校验通过率，保留两位小数
+    -- 公式：(有效引用数 / 总记录数) * 100%
+    ROUND(
+        (COUNT(sa.id) / COUNT(api.app_id)) * 100, 
+        2
+    ) AS reference_validation_pass_rate
+
+    FROM 
+    -- 主表：sys_api，别名为 api
+    ${src_table} api
+
+    LEFT JOIN 
+    -- 关联表：sys_app，别名为 sa
+    sys_app sa ON api.app_id = sa.id;
+    ```
+
+    ```sql
+    -- ============================================================================
+    -- 输出异常记录：查找所有未在 sys_app 中找到对应 id 的 sys_api 记录（悬空引用）
+    -- ============================================================================
+    SELECT *
+    FROM sys_api api
+    LEFT JOIN sys_app sa ON api.app_id = sa.id
+    WHERE sa.id IS NULL AND api.app_id IS NOT NULL;
+    ```
+
 #### **0402 - 关联数据一致性 (Associated Data Consistency)**
 
 * **示例：检查当 `enabled` 为 `0` 时，`flow_control_rule` 和 `degrade_rule` 是否也为空或标记为无效。**
@@ -377,10 +501,7 @@
         END AS 符合度百分比_X
     FROM sys_api
     WHERE is_delete = b'0' AND enabled = b'0';
-
     ```
-
----
 
 ### **5. 时效性 (Timeliness)**
 
@@ -432,6 +553,22 @@
     -- FROM sys_api
     -- WHERE is_delete = b'0' AND update_time IS NOT NULL AND create_time IS NOT NULL AND update_time > create_time;
 
+    ```
+
+* **示例：此指标需要外部事件触发，无法仅用SQL完成。SQL只能查询 `update_time` 的分布。**
+
+    ```sql
+    -- 查询最近更新的API数量，作为时效性的一个侧面反映
+    SELECT 
+        COUNT(CASE WHEN update_time >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 END) AS updated_last_24h,
+        COUNT(*) AS total_active,
+        ROUND(
+            COUNT(CASE WHEN update_time >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 END) * 1.0 / 
+            COUNT(*), 
+            4
+        ) AS update_timeliness_proxy
+    FROM sys_api 
+    WHERE is_delete = b'0';
     ```
 
 #### **0503 - 时序性 (Sequentiality)**
@@ -510,410 +647,6 @@
     FROM sys_api;
 
     ```
-
----
-
-## Qwen3-235B
-
-好的，根据您提供的 `sys_api` 表结构和《GB/T 36344-2018》标准，我将为您生成一系列SQL脚本，用于计算该表在各个数据质量维度下的具体指标。
-
-这些脚本将直接应用标准中的计算方法（`X = A / B`），其中 `A` 是满足条件的记录数，`B` 是总记录数或预期总数。您可以将这些脚本在数据库中执行，以获得具体的量化数据质量评分。
-
----
-
-### **规范性 (Conformity)**
-
-#### **1.1 指标 0101: 数据标准 (Data Standard)**
-
-* **目标**：检查 `method` 字段是否仅包含标准的HTTP方法。
-
-```sql
--- 计算 method 字段符合标准的比率
--- 假设标准的HTTP方法为：GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
-SELECT 
-    COUNT(CASE WHEN method IN ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS') THEN 1 END) AS A, -- 符合标准的记录数
-    COUNT(*) AS B, -- 总记录数
-    ROUND(
-        COUNT(CASE WHEN method IN ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS') THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS data_standard_ratio -- 数据标准比率
-FROM sys_api 
-WHERE is_delete = b'0'; -- 仅评估未删除的数据
-```
-
-#### **1.2 指标 0102: 数据模型 (Data Model)**
-
-* **目标**：检查 `app_id` 字段是否都存在于 `sys_app` 表中（假设存在此表）。
-
-```sql
--- 计算 app_id 字段符合外键约束的比率
-SELECT 
-    COUNT(CASE WHEN sa.app_id IS NOT NULL THEN 1 END) AS A, -- app_id 存在于 sys_app 表中的记录数
-    COUNT(*) AS B, -- sys_api 表中的总记录数
-    ROUND(
-        COUNT(CASE WHEN sa.app_id IS NOT NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS data_model_ratio -- 数据模型比率
-FROM sys_api sa
-LEFT JOIN sys_app app ON sa.app_id = app.id -- 假设 sys_app 的主键是 id
-WHERE sa.is_delete = b'0'; -- 仅评估未删除的数据
-```
-
-#### **1.3 指标 0103: 元数据 (Metadata)**
-
-* **目标**：检查 `version` 字段是否符合 `vX.Y.Z` 的版本号格式。
-
-```sql
--- 计算 version 字段符合元数据定义（版本号格式）的比率
--- 使用正则表达式匹配 v1.0.0 这类格式
-SELECT 
-    COUNT(CASE WHEN version REGEXP '^v[0-9]+\\.[0-9]+\\.[0-9]+$' THEN 1 END) AS A, -- 符合版本号格式的记录数
-    COUNT(*) AS B, -- 总记录数
-    ROUND(
-        COUNT(CASE WHEN version REGEXP '^v[0-9]+\\.[0-9]+\\.[0-9]+$' THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS metadata_ratio -- 元数据比率
-FROM sys_api 
-WHERE is_delete = b'0' AND version IS NOT NULL; -- 仅评估未删除且version不为空的数据
-```
-
-#### **1.4 指标 0104: 业务规则 (Business Rules)**
-
-* **目标**：检查当 `register_type` 为 '网关自动注册' 时，`create_by` 字段是否为 'gateway'。
-
-```sql
--- 计算符合业务规则（网关注册的创建者应为gateway）的比率
-SELECT 
-    COUNT(CASE 
-        WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
-        WHEN register_type != '网关自动注册' THEN 1 -- 其他情况也视为符合规则
-        ELSE 0 
-    END) AS A, -- 符合业务规则的记录数
-    COUNT(*) AS B, -- 总记录数
-    ROUND(
-        COUNT(CASE 
-            WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
-            WHEN register_type != '网关自动注册' THEN 1 
-            ELSE 0 
-        END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS business_rule_ratio -- 业务规则比率
-FROM sys_api 
-WHERE is_delete = b'0'; -- 仅评估未删除的数据
-```
-
-#### **1.5 指标 0105: 权威参考数据 (Authoritative Reference Data)**
-
-* **目标**：检查 `openapi_type` 字段是否为空或在预定义的权威列表中。
-
-```sql
--- 计算 openapi_type 字段引用权威参考数据的比率
--- 假设权威列表为：'OpenAPI 3.0', 'Swagger 2.0', 'RAML'
-SELECT 
-    COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS reference_data_ratio
-FROM sys_api 
-WHERE is_delete = b'0';
-```
-
-#### **1.6 指标 0106: 安全规范 (Security Specification)**
-
-* **目标**：检查 `api_secret` 字段是否经过加密（例如，长度大于16位且为随机字符串，或通过加密函数处理）。**注意**：真正的安全检查应在应用层进行，SQL中只能做简单推断。
-
-```sql
--- **警告**：这是一个非常简化的示例，仅检查长度。
--- 真实场景中，明文密码/密钥是严重安全问题，应通过应用日志或安全扫描工具检查。
-SELECT 
-    COUNT(CASE WHEN LENGTH(api_secret) > 32 THEN 1 END) AS A, -- 假设长字符串更可能是密文
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN LENGTH(api_secret) > 32 THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS security_spec_ratio
-FROM sys_api 
-WHERE is_delete = b'0' AND api_secret IS NOT NULL;
-```
-
----
-
-### **完整性 (Completeness)**
-
-#### **2.1 指标 0201: 数据元素完整性 (Data Element Completeness)**
-
-* **目标**：检查核心字段 `name`, `path`, `method`, `app_id` 是否都已赋值。
-
-```sql
--- 计算关键字段均不为空的记录比率
-SELECT 
-    COUNT(CASE WHEN name IS NOT NULL AND path IS NOT NULL AND method IS NOT NULL AND app_id IS NOT NULL THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN name IS NOT NULL AND path IS NOT NULL AND method IS NOT NULL AND app_id IS NOT NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS element_completeness_ratio
-FROM sys_api 
-WHERE is_delete = b'0';
-```
-
-#### **2.2 指标 0202: 数据记录完整性 (Data Record Completeness)**
-
-* **目标**：检查已启用的API是否都提供了请求和响应示例。
-
-```sql
--- 计算“已启用”API的文档完整性比率
-SELECT 
-    COUNT(CASE 
-        WHEN enabled = b'1' AND request_params_example IS NOT NULL AND response_data_example IS NOT NULL THEN 1
-        WHEN enabled = b'0' THEN 1 -- 已禁用的API不强制要求
-        ELSE 0 
-    END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE 
-            WHEN enabled = b'1' AND request_params_example IS NOT NULL AND response_data_example IS NOT NULL THEN 1
-            WHEN enabled = b'0' THEN 1 
-            ELSE 0 
-        END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS record_completeness_ratio
-FROM sys_api 
-WHERE is_delete = b'0';
-```
-
----
-
-### **准确性 (Accuracy)**
-
-#### **3.1 指标 0301: 数据内容正确性 (Data Content Correctness)**
-
-* **目标**：此指标通常需要外部系统验证（如调用API测试 `path` 是否真实存在），无法仅用SQL完成。SQL只能做逻辑检查，例如检查 `path` 是否以 `/` 开头。
-
-```sql
--- 简化版：检查 path 是否符合基本格式
-SELECT 
-    COUNT(CASE WHEN path LIKE '/%' THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN path LIKE '/%' THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS content_correctness_ratio
-FROM sys_api 
-WHERE is_delete = b'0' AND path IS NOT NULL;
-```
-
-#### **3.2 指标 0302: 数据格式合规性 (Data Format Compliance)**
-
-* **目标**：检查 `create_time` 和 `update_time` 是否为有效的日期时间。
-
-```sql
--- 检查时间字段的格式合规性
--- 在MySQL中，如果字段是datetime类型，非法值通常会被转换或报错，所以这里检查非空即可作为代理指标
-SELECT 
-    COUNT(CASE WHEN create_time IS NOT NULL AND update_time IS NOT NULL THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN create_time IS NOT NULL AND update_time IS NOT NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS format_compliance_ratio
-FROM sys_api 
-WHERE is_delete = b'0';
-```
-
-#### **3.3 指标 0303: 数据重复率 (Data Duplication Rate)**
-
-* **目标**：检查 `app_id`, `path`, `method` 的组合是否唯一。
-
-```sql
--- 计算重复记录的比率
-WITH Duplicates AS (
-    SELECT 
-        app_id, 
-        path, 
-        method, 
-        COUNT(*) AS cnt
-    FROM sys_api 
-    WHERE is_delete = b'0'
-    GROUP BY app_id, path, method
-    HAVING COUNT(*) > 1
-)
-SELECT 
-    COALESCE(SUM(d.cnt), 0) AS A, -- 重复的记录总数
-    (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'0') AS B,
-    ROUND(
-        COALESCE(SUM(d.cnt), 0) * 1.0 / 
-        (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'0'), 
-        4
-    ) AS duplication_rate
-FROM Duplicates d;
-```
-
-#### **3.4 指标 0304: 数据唯一性 (Data Uniqueness)**
-
-* **目标**：检查主键 `id` 是否唯一（这是数据库约束，通常为100%）。
-
-```sql
--- 主键唯一性应为100%，此查询用于验证
-SELECT 
-    COUNT(*) AS A, -- 此查询结果应等于总记录数
-    (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'0') AS B,
-    ROUND(
-        COUNT(*) * 1.0 / 
-        (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'0'), 
-        4
-    ) AS uniqueness_ratio
-FROM (
-    SELECT id FROM sys_api WHERE is_delete = b'0'
-    GROUP BY id -- 如果有重复id，这里会合并
-) AS unique_ids;
-```
-
-#### **3.5 指标 0305: 脏数据出现率 (Dirty Data Occurrence Rate)**
-
-* **目标**：检查 `response_code` 字段中是否包含非标准的HTTP状态码。
-
-```sql
--- 检查 response_code 中是否包含明显错误的值（例如，非数字或超出常见范围）
--- 这是一个非常粗略的估计
-SELECT 
-    COUNT(CASE WHEN response_code REGEXP '[^0-9, ]' OR CAST(SUBSTRING_INDEX(response_code, ',', 1) AS UNSIGNED) NOT BETWEEN 100 AND 599 THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN response_code REGEXP '[^0-9, ]' OR CAST(SUBSTRING_INDEX(response_code, ',', 1) AS UNSIGNED) NOT BETWEEN 100 AND 599 THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS dirty_data_rate
-FROM sys_api 
-WHERE is_delete = b'0' AND response_code IS NOT NULL;
-```
-
----
-
-### **一致性 (Consistency)**
-
-#### **4.1 指标 0401: 相同数据一致性 (Same Data Consistency)**
-
-* **目标**：检查 `sys_api` 中的 `app_id` 与 `sys_app` 表中的应用信息是否一致（例如，应用未被删除）。
-
-```sql
--- 计算关联数据一致的比率
-SELECT 
-    COUNT(CASE WHEN app.is_delete = b'0' OR app.is_delete IS NULL THEN 1 END) AS A, -- 关联的应用未被删除
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN app.is_delete = b'0' OR app.is_delete IS NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS same_data_consistency_ratio
-FROM sys_api sa
-LEFT JOIN sys_app app ON sa.app_id = app.id
-WHERE sa.is_delete = b'0';
-```
-
-#### **4.2 指标 0402: 关联数据一致性 (Associated Data Consistency)**
-
-* **目标**：检查 `create_time` 是否早于或等于 `update_time`。
-
-```sql
--- 计算满足时序一致性的比率
-SELECT 
-    COUNT(CASE WHEN create_time <= update_time OR update_time IS NULL THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN create_time <= update_time OR update_time IS NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS associated_data_consistency_ratio
-FROM sys_api 
-WHERE is_delete = b'0' AND create_time IS NOT NULL;
-```
-
----
-
-### **时效性 (Timeliness)**
-
-#### **5.2 指标 0502: 基于时间点及时性 (Timeliness Based on Time Point)**
-
-* **目标**：此指标需要外部事件触发，无法仅用SQL完成。SQL只能查询 `update_time` 的分布。
-
-```sql
--- 查询最近更新的API数量，作为时效性的一个侧面反映
-SELECT 
-    COUNT(CASE WHEN update_time >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 END) AS updated_last_24h,
-    COUNT(*) AS total_active,
-    ROUND(
-        COUNT(CASE WHEN update_time >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS update_timeliness_proxy
-FROM sys_api 
-WHERE is_delete = b'0';
-```
-
-#### **5.3 指标 0503: 时序性 (Sequentiality)**
-
-* **目标**：检查 `delete_time` 是否晚于 `update_time`。
-
-```sql
--- 计算满足删除时序要求的比率
-SELECT 
-    COUNT(CASE WHEN delete_time >= update_time OR delete_time IS NULL THEN 1 END) AS A,
-    COUNT(*) AS B,
-    ROUND(
-        COUNT(CASE WHEN delete_time >= update_time OR delete_time IS NULL THEN 1 END) * 1.0 / 
-        COUNT(*), 
-        4
-    ) AS sequentiality_ratio
-FROM sys_api 
-WHERE is_delete = b'1' AND delete_time IS NOT NULL AND update_time IS NOT NULL; -- 仅对已删除且时间不为空的记录检查
-```
-
----
-
-### **可访问性 (Accessibility)**
-
-#### **6.1 指标 0601: 可访问 (Accessible)**
-
-* **目标**：此指标是系统级的，指数据库连接和查询的可用性，无法用单条SQL查询自身来衡量。它通常通过监控系统来评估。
-
-```sql
--- 此查询本身的成功执行就证明了当前的可访问性，但无法量化。
--- 系统层面的监控会记录查询成功率。
-SELECT 'This query tests accessibility. If you see this, the table is currently accessible.' AS message;
-```
-
-#### **6.2 指标 0602: 可用性 (Availability)**
-
-* **目标**：检查被逻辑删除的数据是否仍可查询（即 `is_delete` 标记的有效性）。
-
-```sql
--- 计算被标记为删除的数据的可用性（它们应该仍然可以被查到）
-SELECT 
-    COUNT(*) AS A, -- 被标记为删除的记录数
-    (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'1') AS B, -- 预期的被删除记录总数
-    ROUND(
-        COUNT(*) * 1.0 / 
-        (SELECT COUNT(*) FROM sys_api WHERE is_delete = b'1'), 
-        4
-    ) AS availability_ratio -- 可用性比率（应为1.0）
-FROM sys_api 
-WHERE is_delete = b'1'; -- 尝试查询被删除的记录
-```
-
----
 
 ## **使用说明**
 
