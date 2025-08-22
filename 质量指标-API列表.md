@@ -73,6 +73,46 @@
     WHERE sa.is_delete = b'0'; -- 仅评估未删除的数据
     ```
 
+    *(你可以添加更多外键约束检查，根据数据模型定义)*
+
+    ```sql
+    -- ============================================================================
+    -- 计算 sys_api 表中 app_id 字段与 sys_app 表中 id 字段的主外键关联校验通过率
+    -- ============================================================================
+
+    SELECT 
+    -- sys_api 表中 app_id 非空的总记录数
+    COUNT(*) AS total_api_records,
+    
+    -- 在 sys_app 表中能找到对应 id 的 app_id 记录数（有效引用数）
+    COUNT(sa.id) AS valid_referenced_app_records,
+    
+    -- 计算主外键关联校验通过率，保留两位小数
+    -- 公式：(有效引用数 / 总记录数) * 100%
+    ROUND(
+        (COUNT(sa.id) / COUNT(api.app_id)) * 100, 
+        2
+    ) AS reference_validation_pass_rate
+
+    FROM 
+    -- 主表：sys_api，别名为 api
+    ${src_table} api
+
+    LEFT JOIN 
+    -- 关联表：sys_app，别名为 sa
+    sys_app sa ON api.app_id = sa.id;
+    ```
+
+    ```sql
+    -- ============================================================================
+    -- 输出异常记录：查找所有未在 sys_app 中找到对应 id 的 sys_api 记录（悬空引用）
+    -- ============================================================================
+    SELECT *
+    FROM sys_api api
+    LEFT JOIN sys_app sa ON api.app_id = sa.id
+    WHERE sa.id IS NULL AND api.app_id IS NOT NULL;
+    ```
+
 #### **0103 - 元数据 (Metadata)**
 
 * **示例：检查 `encrypt` 字段是否只包含 `0` 或 `1`（符合 `bit(1)` 的元数据定义）。**
@@ -115,45 +155,45 @@
 
 #### **0104 - 业务规则 (Business Rule)**
 
-* **示例：检查当 `type` 为 '内部API' 时，`enabled` 是否为 `1`。**
+* **示例：检查当 `type` 为 'inner_api' 时，`enabled` 是否为 `1`。**
 
     ```sql
     -- 0104 - 业务规则 - 检查内部API必须启用
     SELECT
         '0104' AS 指标编号,
         '业务规则' AS 指标名称,
-        '检查当 type 为 ''内部API'' 时，enabled 是否为 1' AS 指标描述,
-        COUNT(*) AS B_总相关记录数, -- 只看 type='内部API' 的记录
+        '检查当 type 为 ''inner_api'' 时，enabled 是否为 1' AS 指标描述,
+        COUNT(*) AS B_总相关记录数, -- 只看 type='inner_api' 的记录
         COUNT(CASE WHEN enabled = b'1' THEN 1 END) AS A_满足规则的记录数,
         CASE
             WHEN COUNT(*) = 0 THEN NULL
             ELSE ROUND(COUNT(CASE WHEN enabled = b'1' THEN 1 END) * 100.0 / COUNT(*), 2)
         END AS 符合度百分比_X
     FROM sys_api
-    WHERE is_delete = b'0' AND type = '内部API'; -- 只评估相关记录
+    WHERE is_delete = b'0' AND type = 'inner_api'; -- 只评估相关记录
 
     ```
 
     *(需要根据实际的业务规则调整条件)*
 
-* **示例：检查当 `register_type` 为 '网关自动注册' 时，`create_by` 字段是否为 'gateway'。**
+* **示例：检查当 `register_type` 为 'manual' 时，`create_by` 字段是否为 'not null'。**
 
     ```sql
-    -- 计算符合业务规则（网关注册的创建者应为gateway）的比率
+    -- 计算符合业务规则（手动注册的创建者应为not null）的比率
     SELECT 
         COUNT(CASE 
-            WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
-            WHEN register_type != '网关自动注册' THEN 1 -- 其他情况也视为符合规则
+            WHEN register_type = 'manual' AND create_by IS NOT NULL THEN 1
+            WHEN register_type != 'manual' THEN 1 -- 其他情况也视为符合规则
             ELSE 0 
         END) AS A, -- 符合业务规则的记录数
         COUNT(*) AS B, -- 总记录数
         ROUND(
             COUNT(CASE 
-                WHEN register_type = '网关自动注册' AND create_by = 'gateway' THEN 1
-                WHEN register_type != '网关自动注册' THEN 1 
-                ELSE 0 
-            END) * 1.0 / 
-            COUNT(*), 
+                WHEN register_type = 'manual' AND create_by IS NULL THEN 1
+                WHEN register_type != 'manual' THEN 1
+                ELSE 0
+            END) * 1.0 /
+            COUNT(*),
             4
         ) AS business_rule_ratio -- 业务规则比率
     FROM sys_api 
@@ -161,6 +201,8 @@
     ```
 
 #### **0105 - 权威参考数据 (Authoritative Reference Data)**
+
+检查字段值是否在预定义的有效值列表中，属于验证数据是否引用了正确的参考值的范畴。
 
 * **示例：检查 `response_data_type` 是否在预定义列表中。**
 
@@ -187,12 +229,12 @@
 
     ```sql
     -- 计算 openapi_type 字段引用权威参考数据的比率
-    -- 假设权威列表为：'OpenAPI 3.0', 'Swagger 2.0', 'RAML'
+    -- 假设权威列表为：'data', 'function'
     SELECT 
-        COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) AS A,
+        COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('data', 'function') THEN 1 END) AS A,
         COUNT(*) AS B,
         ROUND(
-            COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('OpenAPI 3.0', 'Swagger 2.0', 'RAML') THEN 1 END) * 1.0 / 
+            COUNT(CASE WHEN openapi_type IS NULL OR openapi_type IN ('data', 'function') THEN 1 END) * 1.0 / 
             COUNT(*), 
             4
         ) AS reference_data_ratio
@@ -201,6 +243,27 @@
     ```
 
 #### **0106 - 安全规范 (Security Specification)**
+
+* **示例：检查当 `type` 为 'outer_api' 时且 `path` 包含通配符 `* ,** ,*.*`，`enabled` 是否为 `0`。**
+
+    ```sql
+    -- 0106 - 安全规范 - 检查外部API且包含通配符的路径禁用状态
+    SELECT
+        '0106' AS 指标编号,
+        '安全规范' AS 指标名称,
+        '检查当 type 为 ''outer_api'' 时且 path 包含通配符 ''*'' 或 ''*.*''，enabled 是否为 0' AS 指标描述,
+        COUNT(*) AS B_总相关记录数, -- 只看 type='outer_api' 的记录
+        COUNT(CASE WHEN enabled = b'0' THEN 1 END) AS A_满足规则的记录数,
+        CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            ELSE ROUND(COUNT(CASE WHEN enabled = b'0' THEN 1 END) * 100.0 / COUNT(*), 2)
+        END AS 符合度百分比_X
+    FROM sys_api
+    WHERE is_delete = b'0' AND type = 'outer_api'; -- 只评估相关记录
+
+    ```
+
+    *(需要根据实际的业务规则调整条件)*
 
 * **示例：检查 `api_secret` 和 `api_secret_private` 是否不为明文存储（这里简化为检查是否为空，实际可能需要更复杂逻辑）。**
 
@@ -386,17 +449,22 @@
         END AS 违反唯一性百分比_X
     FROM sys_api
     WHERE is_delete = b'0';
+    ```
 
-    -- 更常见的用法是检查业务上的唯一性，如 path+method
-    -- SELECT
-    --     '0304' AS 指标编号,
-    --     '数据唯一性' AS 指标名称,
-    --     '检查 path 和 method 组合的唯一性' AS 指标描述,
-    --     COUNT(*) AS B_总记录数,
-    --     (COUNT(*) - COUNT(DISTINCT CONCAT(path, '|', method))) AS A_违反唯一性的记录数,
-    --     CASE WHEN COUNT(*) = 0 THEN NULL ELSE ROUND((COUNT(*) - COUNT(DISTINCT CONCAT(path, '|', method))) * 100.0 / COUNT(*), 2) END AS 违反唯一性百分比_X
-    -- FROM sys_api
-    -- WHERE is_delete = b'0';
+* **示例：检查业务上的记录唯一性。**
+
+    ```sql
+    -- 0304 - 数据唯一性 - 检查业务上的唯一性，即 app_id、path 和 method 三个字段组合的唯一性
+    -- 如果存在重复的组合，则意味着同一个应用下定义了路径和方法完全相同的API，这通常是不允许的
+    SELECT
+        '0304' AS 指标编号,
+        '数据唯一性' AS 指标名称,
+        '检查 app_id、path 和 method 三个字段组合的唯一性' AS 指标描述,
+        COUNT(*) AS B_总记录数,
+        (COUNT(*) - COUNT(DISTINCT CONCAT(app_id, '|', path, '|', method))) AS A_违反唯一性记录数,
+        CASE WHEN COUNT(*) = 0 THEN NULL ELSE ROUND((COUNT(*) - COUNT(DISTINCT CONCAT(app_id, '|', path, '|', method))) * 100.0 / COUNT(*), 2) END AS 违反唯一性百分比_X
+    FROM sys_api
+    WHERE is_delete = b'0'; -- 仅评估未删除的有效数据
     ```
 
 #### **0305 - 脏数据出现率 (Dirty Data Occurrence Rate)**
@@ -424,7 +492,7 @@
 
 #### **0401 - 相同数据一致性 (Same Data Consistency)**
 
-* **示例：检查 `sys_api` 中的 `app_id` 是否在 `sys_app` 中存在。**
+* **错误示例：检查 `sys_api` 中的 `app_id` 是否在 `sys_app` 中存在。**
 
     ```sql
     -- 0401 - 相同数据一致性 - 检查 app_id 是否在 sys_app 中存在
@@ -443,44 +511,6 @@
     LEFT JOIN sys_app sa ON s_api.app_id = sa.id -- 假设关联字段
     WHERE s_api.is_delete = b'0';
 
-    ```
-
-    ```sql
-    -- ============================================================================
-    -- 计算 sys_api 表中 app_id 字段与 sys_app 表中 id 字段的主外键关联校验通过率
-    -- ============================================================================
-
-    SELECT 
-    -- sys_api 表中 app_id 非空的总记录数
-    COUNT(*) AS total_api_records,
-    
-    -- 在 sys_app 表中能找到对应 id 的 app_id 记录数（有效引用数）
-    COUNT(sa.id) AS valid_referenced_app_records,
-    
-    -- 计算主外键关联校验通过率，保留两位小数
-    -- 公式：(有效引用数 / 总记录数) * 100%
-    ROUND(
-        (COUNT(sa.id) / COUNT(api.app_id)) * 100, 
-        2
-    ) AS reference_validation_pass_rate
-
-    FROM 
-    -- 主表：sys_api，别名为 api
-    ${src_table} api
-
-    LEFT JOIN 
-    -- 关联表：sys_app，别名为 sa
-    sys_app sa ON api.app_id = sa.id;
-    ```
-
-    ```sql
-    -- ============================================================================
-    -- 输出异常记录：查找所有未在 sys_app 中找到对应 id 的 sys_api 记录（悬空引用）
-    -- ============================================================================
-    SELECT *
-    FROM sys_api api
-    LEFT JOIN sys_app sa ON api.app_id = sa.id
-    WHERE sa.id IS NULL AND api.app_id IS NOT NULL;
     ```
 
 #### **0402 - 关联数据一致性 (Associated Data Consistency)**
